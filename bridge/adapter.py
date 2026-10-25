@@ -352,29 +352,34 @@ _WRAP = re.compile(r"^(?:[({!]\s*)*(?:(?:sudo|env|command|exec|nohup|time|nice|x
 
 
 def bash_rule_hit(arg: str, command: str) -> bool:
-    """Bash(prefix:*) / Bash(pat*tern). Fail closed: a hit when any command segment matches after normalization
-    (quotes and backslashes removed, wrappers stripped, argv0 -> basename), OR when the rule's program appears
-    anywhere else in the command - as an argument, after an expansion/redirection/subshell, anything we cannot model.
-    Over-asking is acceptable; letting a gated command through is not."""
-    pat = " ".join((arg[:-2] + " *" if arg.endswith(":*") else arg).split())
+    """Bash(prefix:*) / Bash(pat*tern), fail closed. Only a plain command (no quotes, backslashes, $, backticks,
+    braces, globs) is matched precisely: segments split on && || ; | & newline, wrappers stripped, argv0 compared by
+    basename on BOTH sides. If the command has anything we don't model and the rule's program name occurs anywhere in
+    it (even as a fragment), it needs approval. Over-asking is acceptable; letting a gated command through is not."""
+    words = " ".join((arg[:-2] + " *" if arg.endswith(":*") else arg).split()).split(" ")
+    words[0] = os.path.basename(words[0])
+    pat = " ".join(words)
+    prog = words[0].strip("*")
+    if not prog:
+        return True
     rx = re.compile("^" + ".*".join(re.escape(x) for x in pat.split("*")) + "$")
     bare = re.compile("^" + re.escape(pat[:-2]) + "$") if pat.endswith(" *") else None
-    prog = os.path.basename(pat.split(" ", 1)[0].strip("*"))
-    flat = re.sub(r"[\"'\\]", "", command)
-    for seg in re.split(r"&&|\|\||;|\||&|\n|\$\(|`|\(|\)|\{|\}", flat):
+    cmd = re.sub(r"\\\n", "", command)
+    if re.search(r"[\"'\\$`{}*?\[\]]", cmd) and prog in cmd:
+        return True  # unmodelled construct + program present anywhere
+    for seg in re.split(r"&&|\|\||;|\||&|\n|\(|\)", cmd):
         seg = " ".join(_WRAP.sub("", seg.strip()).split())
         if not seg:
             continue
         w = seg.split(" ")
+        if re.search(r"[\"'\\$`{}*?\[\]]", w[0]):
+            return True  # program name itself is not a plain literal: unknown program, could be the gated one
         w[0] = os.path.basename(w[0])
-        seg = " ".join(w)
-        if rx.match(seg) or (bare and bare.match(seg)):
+        if rx.match(" ".join(w)) or (bare and bare.match(" ".join(w))):
             return True
-        if prog and prog in (os.path.basename(x) for x in w[1:]):
-            return True  # program passed as an argument (sh -c, xargs, find -exec, eval, ...)
-    if not prog:
-        return True
-    return any(os.path.basename(t) == prog for t in re.split(r"[\s=<>$;&|(){}]+", flat)) and bool(re.search(r"[$<>=]", flat))
+        if prog in (os.path.basename(x) for x in w[1:]):
+            return True  # program passed as an argument (xargs, find -exec, env-like wrappers we don't know)
+    return False
 
 
 
