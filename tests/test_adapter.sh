@@ -7,7 +7,7 @@ H="$R/examples/hooks"
 PY="/usr/bin/python3 -I"
 T=$(mktemp -d)
 export AGENTS_STATE_DIR="$T/state" AGENTS_BRIDGE_HOME="$R"
-printf '{"hooks_source":"%s","approval_word":"approve","ask_tools":["mcp__paid__generate-*","mcp__wholesrv","mcp__argsrv__run(x)"]}' "$R/examples/hooks.json" > "$T/bridge.json"
+printf '{"hooks_source":"%s","approval_word":"approve","ask_tools":["mcp__paid__generate-*","mcp__wholesrv","mcp__argsrv__run(x)","WebFetch","Bash(npm publish:*)"]}' "$R/examples/hooks.json" > "$T/bridge.json"
 export AGENTS_BRIDGE_CONFIG="$T/bridge.json"
 ok=0; bad=0
 check() {  # desc harness expected_rc payload [hook...]  (no hook = --dispatch)
@@ -73,6 +73,10 @@ check "goose srv__tool form gated"       goose 2 '{"cwd":"/tmp","tool_name":"pai
 check "opencode srv_tool form gated"     opencode 2 '{"cwd":"/tmp","tool_name":"paid_generate_image","tool_input":{}}'
 check "gemini mcp_srv_tool form gated"   gemini 2 '{"cwd":"/tmp","tool_name":"mcp_wholesrv_x","tool_input":{}}'
 check "unrelated builtin passes"         opencode 0 '{"cwd":"/tmp","tool_name":"read","tool_input":{"filePath":"/tmp/x"}}'
+
+check "non-MCP rule WebFetch (gemini web_fetch)" gemini 2 '{"cwd":"/tmp","tool_name":"web_fetch","tool_input":{"url":"https://x"}}'
+check "Bash(npm publish:*) gates that command"  codex 2 '{"cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"cd pkg && npm publish --access public"}}'
+check "Bash rule does not gate other commands"  codex 0 '{"cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"npm test"}}'
 
 # context events
 out=$(printf '{"cwd":"/tmp","session_id":"s","source":"startup"}' | $PY "$A" --harness codex --event SessionStart --dispatch)

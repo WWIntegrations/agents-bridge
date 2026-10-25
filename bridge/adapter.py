@@ -324,20 +324,34 @@ def mcp_name_forms(*names: str) -> set:
     return out
 
 
-def rule_hits(rule: str, forms: set) -> bool:
-    """Claude semantics: "mcp__srv" = every tool of srv, "mcp__srv__*" prefix, "mcp__srv__tool" exact;
-    "Tool(args)" -> the tool part (args are ignored = stricter)."""
-    r = str(rule).split("(", 1)[0].strip().replace("-", "_")
-    if not r.startswith("mcp__"):
-        return False  # shell/file rules are enforced by the agent's own rules (Codex execpolicy, policies)
-    for t in forms:
-        if t == r or (r.endswith("*") and t.startswith(r[:-1])) or (r.count("__") == 1 and t.startswith(r + "__")):
-            return True
-    return False
+def rule_hits(rule: str, forms: set, tool: str = "", command: str = "") -> bool:
+    """Claude semantics. MCP: "mcp__srv" = every tool of srv, "mcp__srv__*" prefix, "mcp__srv__tool" exact.
+    Other tools (matched on the normalized Claude name): "WebFetch" exact, "Bash(git push:*)" / "Bash(cmd)" on the
+    shell command; any other "Tool(args)" gates the whole tool (args ignored = stricter, never looser)."""
+    raw = str(rule).strip()
+    r, _, arg = raw.partition("(")
+    r = r.strip().replace("-", "_")
+    arg = arg[:-1] if arg.endswith(")") else arg
+    if r.startswith("mcp__"):
+        return any(t == r or (r.endswith("*") and t.startswith(r[:-1])) or (r.count("__") == 1 and t.startswith(r + "__"))
+                   for t in forms)
+    t = tool.replace("-", "_")
+    if not t or not (t == r or (r.endswith("*") and t.startswith(r[:-1]))):
+        return False
+    if not arg or arg in ("*", ":*"):
+        return True
+    if t == "Bash":
+        c = " ".join(command.split())
+        if arg.endswith(":*"):
+            pre = " ".join(arg[:-2].split())
+            return c == pre or c.startswith(pre + " ") or any(
+                seg.strip() == pre or seg.strip().startswith(pre + " ") for seg in re.split(r"&&|\|\||;|\|", c))
+        return c == " ".join(arg.split())
+    return True
 
 
 
-def ask_tool(*names: str) -> bool:
+def ask_tool(*names: str, tool: str = "", command: str = "") -> bool:
     """Tools that always need the user's approval outside Claude: bridge.json "ask_tools" plus permissions.ask of the
     hooks source. Don't rely on the agent's own prompt: in Codex 0.164 `codex exec` ran an MCP tool configured with
     approval_mode="prompt" without asking."""
@@ -347,7 +361,7 @@ def ask_tool(*names: str) -> bool:
     except (OSError, ValueError, AttributeError) as e:
         log(f"ask_tools: hooks source permissions unreadable: {e}")
     forms = mcp_name_forms(*names)
-    return any(rule_hits(r, forms) for r in rules)
+    return any(rule_hits(r, forms, tool, command) for r in rules)
 
 
 def matcher_ok(matcher, tool: str) -> bool:
@@ -537,7 +551,8 @@ def main() -> int:
 
     for pl in payloads:
         approved = None  # one approval covers every "ask" guard for this exact call
-        if ev == "PreToolUse" and a.harness != "claude" and ask_tool(pl.get("tool_name", ""), RAW_TOOL):
+        if ev == "PreToolUse" and a.harness != "claude" and ask_tool(pl.get("tool_name", ""), RAW_TOOL, tool=pl.get("tool_name", ""),
+                                                              command=str((pl.get("tool_input") or {}).get("command", ""))):
             approved = approval_consume(pl)
             if not approved:
                 code = approval_code(pl)
