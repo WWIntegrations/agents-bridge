@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# mcp-headers <server> - prints a JSON object of HTTP headers for an MCP server (Codex `http_headers_helper`).
+# Secrets are not copied anywhere new:
+#   1. ~/.agents/mcp-headers.d/<server>  - your own executable helper (e.g. `gh auth token` from the keychain)
+#   2. headers of that server in ~/.claude.json (where Claude Code already keeps them)
+# Never run it inside an agent session: stdout IS the secret.
+set -euo pipefail
+srv="${1:?usage: mcp-headers <server>}"
+own="$HOME/.agents/mcp-headers.d/$srv"
+[ -x "$own" ] && exec "$own"
+exec /usr/bin/python3 -I - "$srv" <<'PY'
+import json, os, sys
+srv = sys.argv[1]
+try:
+    d = json.load(open(os.path.expanduser("~/.claude.json")))
+except (OSError, ValueError):
+    d = {}
+h = (d.get("mcpServers", {}).get(srv) or {}).get("headers") or {}
+if not h:
+    sys.stderr.write(f"mcp-headers: no headers for {srv}\n")
+print(json.dumps(h))
+PY

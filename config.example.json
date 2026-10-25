@@ -1,0 +1,40 @@
+{
+  "_doc": "Copy to ~/.agents/bridge.json. Read by bridge/adapter.py (hooks at runtime) and bridge/sync.py (config generation).",
+
+  "source": "claude",
+  "targets": ["codex", "gemini", "opencode", "qwen", "goose"],
+
+  "hooks_source": "~/.claude/settings.json",
+  "skip": ["* some-claude-only-hook.sh"],
+  "plugin_hooks": ["superpowers SessionStart"],
+
+  "agents_md": "~/.agents/AGENTS.md",
+  "memory_dir": "~/.claude/projects/-Users-YOU/memory",
+  "context_files": ["~/.agents/memory/MEMORY.md"],
+  "context_limit": 24000,
+  "sync_on_start": "python3 ~/agents-bridge/bridge/sync.py --only base",
+
+  "repos": ["~/code/project-a", "~/code/project-b"],
+  "writable_roots": ["~/notes"],
+
+  "codex": {
+    "model_reasoning_effort": "high",
+    "approval_policy": "on-request",
+    "approvals_reviewer": "auto_review",
+    "sandbox_mode": "workspace-write",
+    "web_search": "live",
+    "network_access": true
+  },
+
+  "mcp_header_helper": "~/agents-bridge/bridge/mcp-headers",
+  "mcp_secret_headers": {"exa": {"x-api-key": "EXA_API_KEY"}, "github": {"Authorization": "Bearer ${GITHUB_MCP_TOKEN}"}},
+  "ask_tools": [],
+
+  "local_models": {"ollama": "http://127.0.0.1:11434/v1", "lmstudio": "http://127.0.0.1:1234/v1"},
+  "local_model_names": {"ollama": ["qwen3-coder:30b"], "lmstudio": ["qwen3-coder-30b"]},
+
+  "approval_word": "approve",
+  "approval_ttl": 600,
+  "lang": "en",
+  "state_dir": "~/.agents/state"
+}

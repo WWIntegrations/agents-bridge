@@ -1,0 +1,13 @@
+{
+  "description": "Neutral hooks source (Claude Code shape). Point bridge.json hooks_source here when you do not author in Claude or Codex.",
+  "hooks": {
+    "SessionStart": [
+      {"hooks": [{"type": "command", "command": "${AGENTS_BRIDGE_HOME}/examples/hooks/session-context.sh"}]}
+    ],
+    "PreToolUse": [
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "${AGENTS_BRIDGE_HOME}/examples/hooks/confirm-destructive.sh"}]},
+      {"matcher": "Bash|Read|Edit|Write|MultiEdit|Grep|Glob", "hooks": [{"type": "command", "command": "${AGENTS_BRIDGE_HOME}/examples/hooks/block-secret-files.sh"}]},
+      {"matcher": "Bash|Edit|Write|MultiEdit", "hooks": [{"type": "command", "command": "${AGENTS_BRIDGE_HOME}/examples/hooks/ask-agent-config.sh"}]}
+    ]
+  }
+}

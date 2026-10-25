@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# agent-start - print the SessionStart context for an agent WITHOUT hooks (paste it as the first message).
+HERE="$(cd "$(dirname "$0")" && pwd)"
+printf '{"cwd":"%s","session_id":"manual-%s","source":"startup"}' "$PWD" "$(date +%s)" |
+  /usr/bin/python3 -I "$HERE/adapter.py" --harness "${AGENT_HARNESS:-manual}" --event SessionStart --dispatch --with-context

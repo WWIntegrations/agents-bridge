@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# agent <codex|gemini|opencode|qwen|goose|claude> [args...] - start any agent in the shared environment.
+#   - MCP header secrets (bridge.json mcp_secret_headers) are exported ONLY into the agent process,
+#     resolved by bridge/mcp-headers (Codex does not need this: it calls the helper itself)
+#   - AGENT_HARNESS=<name> for scripts
+#   - quick doctor first, so a broken layer is never silent
+set -euo pipefail
+h="${1:?usage: agent <codex|gemini|opencode|qwen|goose|claude> [args]}"; shift
+HERE="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)"
+export AGENT_HARNESS="$h"
+python3 "$HERE/doctor.py" --quiet || echo "agent: doctor reports errors (python3 $HERE/doctor.py)" >&2
+if [ "$h" != codex ] && [ "$h" != claude ]; then
+  eval "$(/usr/bin/python3 -I - "$HERE" <<'PY'
+import json, os, re, shlex, subprocess, sys
+cfg_path = os.environ.get("AGENTS_BRIDGE_CONFIG", os.path.expanduser("~/.agents/bridge.json"))
+try:
+    cfg = json.load(open(cfg_path))
+except (OSError, ValueError):
+    cfg = {}
+for srv, hdrs in (cfg.get("mcp_secret_headers") or {}).items():
+    try:
+        got = json.loads(subprocess.run([os.path.join(sys.argv[1], "mcp-headers"), srv], capture_output=True,
+                                        text=True, timeout=20).stdout or "{}")
+    except Exception:
+        got = {}
+    for header, var in hdrs.items():
+        name = re.sub(r"[^A-Z0-9_]", "", var.split("${")[-1].split("}")[0]) if "$" in var else var
+        val = got.get(header, "")
+        if val.startswith("Bearer ") and "Bearer" in var:
+            val = val[len("Bearer "):]
+        if val:
+            print(f"export {name}={shlex.quote(val)}")
+PY
+)"
+  export OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1  # same skills are in ~/.agents/skills
+fi
+exec "$h" "$@"
