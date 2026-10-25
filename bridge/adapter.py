@@ -352,19 +352,29 @@ _WRAP = re.compile(r"^(?:[({!]\s*)*(?:(?:sudo|env|command|exec|nohup|time|nice|x
 
 
 def bash_rule_hit(arg: str, command: str) -> bool:
-    """Bash(prefix:*) / Bash(pat*tern) against every command segment (wrappers stripped); fail closed on
-    indirection ($(), backticks, eval, sh -c, backslashes) when the rule's program appears anywhere."""
+    """Bash(prefix:*) / Bash(pat*tern). Fail closed: a hit when any command segment matches after normalization
+    (quotes and backslashes removed, wrappers stripped, argv0 -> basename), OR when the rule's program appears
+    anywhere else in the command - as an argument, after an expansion/redirection/subshell, anything we cannot model.
+    Over-asking is acceptable; letting a gated command through is not."""
     pat = " ".join((arg[:-2] + " *" if arg.endswith(":*") else arg).split())
-    parts = pat.split("*")
-    rx = re.compile("^" + ".*".join(re.escape(x) for x in parts) + "$")
+    rx = re.compile("^" + ".*".join(re.escape(x) for x in pat.split("*")) + "$")
     bare = re.compile("^" + re.escape(pat[:-2]) + "$") if pat.endswith(" *") else None
-    for seg in re.split(r"&&|\|\||;|\||&|\n", command):
-        seg = " ".join(_WRAP.sub("", seg.strip()).rstrip(" )}").split())
+    prog = os.path.basename(pat.split(" ", 1)[0].strip("*"))
+    flat = re.sub(r"[\"'\\]", "", command)
+    for seg in re.split(r"&&|\|\||;|\||&|\n|\$\(|`|\(|\)|\{|\}", flat):
+        seg = " ".join(_WRAP.sub("", seg.strip()).split())
+        if not seg:
+            continue
+        w = seg.split(" ")
+        w[0] = os.path.basename(w[0])
+        seg = " ".join(w)
         if rx.match(seg) or (bare and bare.match(seg)):
             return True
-    prog = pat.split(" ", 1)[0].strip("*")
-    indirect = re.search(r"\$\(|`|\beval\b|\b(?:ba|z)?sh\s+-\w*c|\\", command)
-    return bool(prog and indirect and re.search(r"(?<![\w./-])" + re.escape(prog) + r"(?![\w-])", command))
+        if prog and prog in (os.path.basename(x) for x in w[1:]):
+            return True  # program passed as an argument (sh -c, xargs, find -exec, eval, ...)
+    if not prog:
+        return True
+    return any(os.path.basename(t) == prog for t in re.split(r"[\s=<>$;&|(){}]+", flat)) and bool(re.search(r"[$<>=]", flat))
 
 
 
