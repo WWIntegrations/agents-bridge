@@ -39,28 +39,30 @@ check "bad input = fail closed"         codex 2 'not json'
 
 # approval protocol: ask -> code -> "approve CODE" -> identical retry passes
 PL='{"cwd":"/tmp","tool_name":"Edit","tool_input":{"file_path":"/Users/x/.gemini/settings.json","old_string":"a","new_string":"b"}}'
-code=$(printf '%s' "$PL" | $PY "$A" --harness codex --event PreToolUse --dispatch 2>&1 >/dev/null | sed -n 's/.*(code \([0-9A-F]\{6\}\)).*/\1/p' | head -1)
+code=$(printf '%s' "$PL" | $PY "$A" --harness codex --event PreToolUse --dispatch 2>&1 >/dev/null | sed -n 's/.*(code \([0-9A-F]\{8\}\)).*/\1/p' | head -1)
 printf '{"prompt":"ok, approve %s"}' "$code" | $PY "$A" --harness codex --event UserPromptSubmit --dispatch >/dev/null
 check "approve $code unlocks ask"       codex 0 "$PL"
 check "approval is per call"           codex 2 "{\"cwd\":\"/tmp\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$RM\"}}"
-code2=$(printf '{"cwd":"/tmp/p","tool_name":"Bash","tool_input":{"command":"cat .env"}}' | $PY "$A" --harness codex --event PreToolUse --dispatch 2>&1 >/dev/null | sed -n 's/.*(code \([0-9A-F]\{6\}\)).*/\1/p')
+code2=$(printf '{"cwd":"/tmp/p","tool_name":"Bash","tool_input":{"command":"cat .env"}}' | $PY "$A" --harness codex --event PreToolUse --dispatch 2>&1 >/dev/null | sed -n 's/.*(code \([0-9A-F]\{8\}\)).*/\1/p')
 printf '{"prompt":"approve %s"}' "${code2:-000000}" | $PY "$A" --harness codex --event UserPromptSubmit --dispatch >/dev/null
 check "deny has no code, stays blocked"   codex 2 '{"cwd":"/tmp/p","tool_name":"Bash","tool_input":{"command":"cat .env"}}'
 
 # hardening (security review): single-use approvals, unissued codes, crashed guards, more tool names
 check "approval is single-use"          codex 2 "$PL"
-printf '{"prompt":"approve ABCDEF"}' | $PY "$A" --harness codex --event UserPromptSubmit --dispatch >/dev/null
-[ ! -e "$AGENTS_STATE_DIR/approvals/ABCDEF" ] && { ok=$((ok+1)); echo "OK   unissued code is ignored"; } || { bad=$((bad+1)); echo "FAIL unissued code recorded"; }
-mkdir -p "$AGENTS_STATE_DIR/approvals"; c3=$(printf '%s' "$PL" | $PY "$A" --harness codex --event PreToolUse --dispatch 2>&1 >/dev/null | sed -n 's/.*(code \([0-9A-F]\{6\}\)).*/\1/p')
-echo "0000" > "$AGENTS_STATE_DIR/approvals/$c3"
-check "forged approval (wrong hash) fails" codex 2 "$PL"
+printf '{"prompt":"approve ABCDEF12"}' | $PY "$A" --harness codex --event UserPromptSubmit --dispatch >/dev/null
+[ ! -e "$AGENTS_STATE_DIR/approvals/ABCDEF12" ] && { ok=$((ok+1)); echo "OK   unissued code is ignored"; } || { bad=$((bad+1)); echo "FAIL unissued code recorded"; }
+c3=$(printf '%s' "$PL" | $PY "$A" --harness codex --event PreToolUse --dispatch 2>&1 >/dev/null | sed -n 's/.*(code \([0-9A-F]\{8\}\)).*/\1/p')
+c4=$(printf '%s' "$PL" | $PY "$A" --harness codex --event PreToolUse --dispatch 2>&1 >/dev/null | sed -n 's/.*(code \([0-9A-F]\{8\}\)).*/\1/p')
+[ -n "$c3" ] && [ "$c3" = "$c4" ] && { ok=$((ok+1)); echo "OK   same call reuses its code"; } || { bad=$((bad+1)); echo "FAIL code reuse $c3/$c4"; }
+echo x > "$AGENTS_STATE_DIR/approvals/$c3"
+check "file named by code is no approval" codex 2 "$PL"
 printf '#!/bin/sh\nexit 1\n' > "$T/crash.sh"; chmod +x "$T/crash.sh"
 check "crashed guard (rc=1) blocks"     codex 2 '{"cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"ls"}}' "$T/crash.sh"
 check "codex write_stdin is a shell"    codex 2 "{\"cwd\":\"/tmp\",\"tool_name\":\"write_stdin\",\"tool_input\":{\"session_id\":1,\"chars\":\"$RM\\n\"}}"
 check "opencode patch tool"             opencode 2 '{"cwd":"/tmp/p","tool_name":"patch","tool_input":{"patchText":"*** Begin Patch\n*** Update File: .env\n@@\n-A\n+B\n*** End Patch"}}'
-mkdir -p "$T/home/.gemini"; printf '{"mcpServers":{"my_srv":{}}}' > "$T/home/.gemini/settings.json"
-out=$(printf '{"cwd":"/tmp","tool_name":"mcp_my_srv_do_thing","tool_input":{}}' | HOME="$T/home" $PY "$A" --harness gemini --event PreToolUse -- /bin/sh -c 'python3 -c "import json,sys;print(json.load(sys.stdin)[\"tool_name\"],file=sys.stderr)"; exit 2' 2>&1 >/dev/null)
-case "$out" in *mcp__my_srv__do_thing*) ok=$((ok+1)); echo "OK   gemini MCP server with underscore";; *) bad=$((bad+1)); echo "FAIL gemini MCP name: $out";; esac
+printf '#!/bin/sh\ngrep -q "\\"tool_name\\": *\\"mcp__my_srv__" && { echo "BLOCKED my_srv" >&2; exit 2; }; exit 0\n' > "$T/g.sh"; chmod +x "$T/g.sh"
+check "gemini ambiguous MCP name: every split checked" gemini 2 '{"cwd":"/tmp","tool_name":"mcp_my_srv_do_thing","tool_input":{}}' "$T/g.sh"
+check "gemini other MCP server passes"   gemini 0 '{"cwd":"/tmp","tool_name":"mcp_other_do_thing","tool_input":{}}' "$T/g.sh"
 
 # context events
 out=$(printf '{"cwd":"/tmp","session_id":"s","source":"startup"}' | $PY "$A" --harness codex --event SessionStart --dispatch)

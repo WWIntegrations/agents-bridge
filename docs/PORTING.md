@@ -55,7 +55,7 @@ Verdict semantics:
 | OpenCode | throw in `tool.execute.before` | `permission: ask` in config only | `experimental.chat.system.transform` |
 | Goose | exit 2 | - | stdout |
 
-The adapter turns `ask` into a block that carries a 6-hex code. The user replies `approve CODE`, the
+The adapter turns `ask` into a block that carries a random 8-hex code. The user replies `approve CODE`, the
 UserPromptSubmit hook records that, and the identical tool call passes once for `approval_ttl` seconds. Approvals are
 stored outside every sandbox's writable roots, so the agent cannot approve itself.
 

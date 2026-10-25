@@ -89,7 +89,7 @@ python3 tests/test_sync.py     # full sync in a throwaway $HOME: every target, n
 - Every generated file carries an agents-bridge marker. A file you wrote yourself gets a `.pre-bridge-<timestamp>.bak` copy before the first
   overwrite. Codex `config.toml` is merged inside a marked block, and Codex's own writes are preserved.
 - Guards are only as good as your scripts. The adapter's job is to make sure they actually **run**, and that they **fail closed**.
-- **Approvals are as strong as the sandbox.** A code is bound to the full SHA-256 of the exact call and session, can be used once,
+- **Approvals are as strong as the sandbox.** A code is random, bound to the full SHA-256 of the exact call and session, single-use,
   and is honored only if the adapter itself issued it. But an agent that can write to `state_dir` can forge one, and so can any
   process running as your user without a sandbox. Codex `workspace-write` keeps `state_dir` out of reach, because sync.py
   never adds it to `writable_roots`. For Gemini, OpenCode, Qwen and Goose, run them sandboxed (Gemini `--sandbox`, a container or a

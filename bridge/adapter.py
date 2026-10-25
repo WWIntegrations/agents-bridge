@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import secrets
 import json
 import os
 import re
@@ -116,16 +117,6 @@ def log(msg: str) -> None:
 
 
 # ------------------------------------------------------------------------------------------------ normalize
-def gemini_servers() -> list[str]:
-    names: list[str] = []
-    for f in (HOME / ".gemini" / "settings.json", Path(os.getcwd()) / ".gemini" / "settings.json"):
-        try:
-            names += list((json.loads(f.read_text()).get("mcpServers") or {}))
-        except (OSError, ValueError, AttributeError):
-            pass
-    return names
-
-
 def _abs(p: str, cwd: str) -> str:
     if not p:
         return p
@@ -226,13 +217,12 @@ def normalize(harness: str, event: str, p: dict) -> list[dict]:
         return [{**base, "tool_name": "Bash", "tool_input": {**ti, "command": cmd_text}}]
     if name.startswith("mcp__"):
         return [{**base, "tool_name": name, "tool_input": ti}]
-    if harness == "gemini" and name.startswith("mcp_"):  # gemini: mcp_<server>_<tool>; server names may contain "_"
+    if harness == "gemini" and name.startswith("mcp_"):  # gemini: mcp_<server>_<tool>; both may contain "_"
+        # ambiguous split: present EVERY candidate to the guards (first block wins) - no config file decides it
         rest = name[4:]
-        srv = max((s for s in gemini_servers() if rest.startswith(s + "_")), key=len, default="")
-        if not srv and "_" in rest:
-            srv = rest.split("_", 1)[0]
-        if srv:
-            return [{**base, "tool_name": f"mcp__{srv}__{rest[len(srv) + 1:]}", "tool_input": ti}]
+        cands = [f"mcp__{rest[:i]}__{rest[i + 1:]}" for i, ch in enumerate(rest) if ch == "_" and 0 < i < len(rest) - 1]
+        if cands:
+            return [{**base, "tool_name": c, "tool_input": ti} for c in cands]
 
     cl = TOOL_MAP.get(low, name)
     tin = dict(ti) if isinstance(ti, dict) else {}
@@ -257,24 +247,36 @@ def payload_hash(payload: dict) -> str:
 
 
 def approval_code(payload: dict) -> str:
-    """Short code shown to the user; the full hash of the exact call is kept server-side in PENDING."""
+    """Random code shown to the user (unguessable, never derived from the call); PENDING/<code> = full hash + time.
+    Re-asking for the same call reuses its code; an existing entry is never overwritten."""
     h = payload_hash(payload)
-    code = h[:6].upper()
     try:
         PENDING.mkdir(parents=True, exist_ok=True)
         os.chmod(PENDING, 0o700)
-        (PENDING / code).write_text(h)
+        now = time.time()
+        for f in PENDING.iterdir():
+            if now - f.stat().st_mtime > float(CFG["approval_ttl"]):
+                f.unlink()
+            elif f.read_text().strip() == h:
+                return f.name
+        while True:
+            code = secrets.token_hex(4).upper()
+            try:
+                with open(PENDING / code, "x") as fh:
+                    fh.write(h)
+                return code
+            except FileExistsError:
+                continue
     except OSError as e:
         log(f"pending write fail: {e}")
-    return code
+        return "--------"
 
 
 def approval_consume(payload: dict) -> bool:
-    """True once per approval: the code was approved by the user within ttl AND it was issued for this exact call."""
-    h = payload_hash(payload)
-    f = APPROVALS / h[:6].upper()
+    """True once: the user approved a code issued for exactly this call (APPROVALS/<full hash>) within ttl."""
+    f = APPROVALS / payload_hash(payload)
     try:
-        ok = f.is_file() and f.read_text().strip() == h and time.time() - f.stat().st_mtime < float(CFG["approval_ttl"])
+        ok = f.is_file() and time.time() - f.stat().st_mtime < float(CFG["approval_ttl"])
         if ok:
             f.unlink()
         return ok
@@ -284,7 +286,7 @@ def approval_consume(payload: dict) -> bool:
 
 def record_approvals(prompt: str) -> list[str]:
     word = re.escape(CFG["approval_word"])
-    codes = [c.upper() for c in re.findall(rf"\b{word}[\s:]+([0-9A-F]{{6}})\b", prompt or "", flags=re.I)]
+    codes = [c.upper() for c in re.findall(rf"\b{word}[\s:]+([0-9A-F]{{8}})\b", prompt or "", flags=re.I)]
     got = []
     for c in codes:
         try:
@@ -293,7 +295,7 @@ def record_approvals(prompt: str) -> list[str]:
             continue
         APPROVALS.mkdir(parents=True, exist_ok=True)
         os.chmod(APPROVALS, 0o700)
-        (APPROVALS / c).write_text(h)
+        (APPROVALS / h).write_text(str(int(time.time())))
         (PENDING / c).unlink()
         got.append(c)
         log(f"approval {c}")
