@@ -7,7 +7,7 @@ H="$R/examples/hooks"
 PY="/usr/bin/python3 -I"
 T=$(mktemp -d)
 export AGENTS_STATE_DIR="$T/state" AGENTS_BRIDGE_HOME="$R"
-printf '{"hooks_source":"%s","approval_word":"approve","ask_tools":["mcp__paid__generate-*"]}' "$R/examples/hooks.json" > "$T/bridge.json"
+printf '{"hooks_source":"%s","approval_word":"approve","ask_tools":["mcp__paid__generate-*","mcp__wholesrv","mcp__argsrv__run(x)"]}' "$R/examples/hooks.json" > "$T/bridge.json"
 export AGENTS_BRIDGE_CONFIG="$T/bridge.json"
 ok=0; bad=0
 check() {  # desc harness expected_rc payload [hook...]  (no hook = --dispatch)
@@ -66,6 +66,13 @@ check "gemini other MCP server passes"   gemini 0 '{"cwd":"/tmp","tool_name":"mc
 
 check "ask_tools blocks paid MCP (codex _ name)" codex 2 '{"cwd":"/tmp","tool_name":"mcp__paid__generate_video","tool_input":{}}'
 check "free MCP tool passes"            codex 0 '{"cwd":"/tmp","tool_name":"mcp__paid__balance","tool_input":{}}'
+
+check "bare mcp__srv rule = every tool"  codex 2 '{"cwd":"/tmp","tool_name":"mcp__wholesrv__anything","tool_input":{}}'
+check "rule with (args) still gates"     codex 2 '{"cwd":"/tmp","tool_name":"mcp__argsrv__run","tool_input":{}}'
+check "goose srv__tool form gated"       goose 2 '{"cwd":"/tmp","tool_name":"paid__generate_video","tool_input":{}}'
+check "opencode srv_tool form gated"     opencode 2 '{"cwd":"/tmp","tool_name":"paid_generate_image","tool_input":{}}'
+check "gemini mcp_srv_tool form gated"   gemini 2 '{"cwd":"/tmp","tool_name":"mcp_wholesrv_x","tool_input":{}}'
+check "unrelated builtin passes"         opencode 0 '{"cwd":"/tmp","tool_name":"read","tool_input":{"filePath":"/tmp/x"}}'
 
 # context events
 out=$(printf '{"cwd":"/tmp","session_id":"s","source":"startup"}' | $PY "$A" --harness codex --event SessionStart --dispatch)

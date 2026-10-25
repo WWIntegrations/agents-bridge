@@ -103,6 +103,7 @@ TOOL_MAP = {  # Gemini CLI / OpenCode / Qwen / Goose tool names -> Claude Code
     "task": "Agent", "spawn_agent": "Agent",
     "multi_edit": "MultiEdit", "notebook_edit": "NotebookEdit", "notebookedit": "NotebookEdit",
 }
+RAW_TOOL = ""
 TOOL_EVENTS = ("PreToolUse", "PostToolUse")
 EVENT_ALIAS = {"BeforeTool": "PreToolUse", "AfterTool": "PostToolUse", "BeforeAgent": "UserPromptSubmit",
                "AfterAgent": "Stop"}  # Gemini CLI event names -> Claude Code
@@ -304,21 +305,49 @@ def record_approvals(prompt: str) -> list[str]:
 
 
 # ------------------------------------------------------------------------------------------------ hooks source
-def ask_tool(tool: str) -> bool:
+def mcp_name_forms(*names: str) -> set:
+    """Every mcp__<server>__<tool> a raw agent tool name could stand for (Codex/Claude mcp__a__b, Goose a__b,
+    Gemini mcp_a_b, OpenCode a_b; "-" == "_"). Over-matching only asks more often; under-matching would leak."""
+    out = set()
+    for n in names:
+        n = str(n or "").replace("-", "_")
+        if not n:
+            continue
+        out.add(n)
+        body = n[5:] if n.startswith("mcp__") else n[4:] if n.startswith("mcp_") else n
+        for sep in ("__", "_"):
+            i = body.find(sep)
+            while i > 0:
+                if i + len(sep) < len(body):
+                    out.add(f"mcp__{body[:i]}__{body[i + len(sep):]}")
+                i = body.find(sep, i + 1)
+    return out
+
+
+def rule_hits(rule: str, forms: set) -> bool:
+    """Claude semantics: "mcp__srv" = every tool of srv, "mcp__srv__*" prefix, "mcp__srv__tool" exact;
+    "Tool(args)" -> the tool part (args are ignored = stricter)."""
+    r = str(rule).split("(", 1)[0].strip().replace("-", "_")
+    if not r.startswith("mcp__"):
+        return False  # shell/file rules are enforced by the agent's own rules (Codex execpolicy, policies)
+    for t in forms:
+        if t == r or (r.endswith("*") and t.startswith(r[:-1])) or (r.count("__") == 1 and t.startswith(r + "__")):
+            return True
+    return False
+
+
+
+def ask_tool(*names: str) -> bool:
     """Tools that always need the user's approval outside Claude: bridge.json "ask_tools" plus permissions.ask of the
-    hooks source (a Claude settings.json). Don't rely on the agent's own prompt: in Codex 0.164 `codex exec` ran an MCP
-    tool configured with approval_mode="prompt" without asking. Matches mcp names with "-" == "_" (Codex rewrites "-")."""
+    hooks source. Don't rely on the agent's own prompt: in Codex 0.164 `codex exec` ran an MCP tool configured with
+    approval_mode="prompt" without asking."""
     rules = list(CFG.get("ask_tools") or [])
     try:
         rules += (json.loads(Path(os.path.expanduser(CFG["hooks_source"])).read_text()).get("permissions") or {}).get("ask") or []
-    except (OSError, ValueError, AttributeError):
-        pass
-    t = tool.replace("-", "_")
-    for r in rules:
-        r = str(r).replace("-", "_")
-        if "(" not in r and (r == t or (r.endswith("*") and t.startswith(r[:-1]))):
-            return True
-    return False
+    except (OSError, ValueError, AttributeError) as e:
+        log(f"ask_tools: hooks source permissions unreadable: {e}")
+    forms = mcp_name_forms(*names)
+    return any(rule_hits(r, forms) for r in rules)
 
 
 def matcher_ok(matcher, tool: str) -> bool:
@@ -480,6 +509,8 @@ def main() -> int:
         p = json.loads(raw) if raw.strip() else {}
     except ValueError:
         return block(a.harness, T["badin"]) if ev == "PreToolUse" else 0
+    global RAW_TOOL
+    RAW_TOOL = str(p.get("tool_name") or p.get("toolName") or "")
     try:
         payloads = normalize(a.harness, ev, p)
     except Exception as e:  # noqa: BLE001
@@ -506,7 +537,7 @@ def main() -> int:
 
     for pl in payloads:
         approved = None  # one approval covers every "ask" guard for this exact call
-        if ev == "PreToolUse" and a.harness != "claude" and ask_tool(pl.get("tool_name", "")):
+        if ev == "PreToolUse" and a.harness != "claude" and ask_tool(pl.get("tool_name", ""), RAW_TOOL):
             approved = approval_consume(pl)
             if not approved:
                 code = approval_code(pl)
