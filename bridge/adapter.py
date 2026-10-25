@@ -335,19 +335,36 @@ def rule_hits(rule: str, forms: set, tool: str = "", command: str = "") -> bool:
     if r.startswith("mcp__"):
         return any(t == r or (r.endswith("*") and t.startswith(r[:-1])) or (r.count("__") == 1 and t.startswith(r + "__"))
                    for t in forms)
-    t = tool.replace("-", "_")
-    if not t or not (t == r or (r.endswith("*") and t.startswith(r[:-1]))):
+    t = tool.replace("-", "_").lower()
+    fam = {"edit": {"edit", "write", "multiedit", "notebookedit"}, "read": {"read", "grep", "glob"}}
+    rl = r.lower()
+    names = fam.get(rl, {rl})
+    if not t or not (t in names or (rl.endswith("*") and t.startswith(rl[:-1]))):
         return False
     if not arg or arg in ("*", ":*"):
         return True
-    if t == "Bash":
-        c = " ".join(command.split())
-        if arg.endswith(":*"):
-            pre = " ".join(arg[:-2].split())
-            return c == pre or c.startswith(pre + " ") or any(
-                seg.strip() == pre or seg.strip().startswith(pre + " ") for seg in re.split(r"&&|\|\||;|\|", c))
-        return c == " ".join(arg.split())
+    if t == "bash":
+        return bash_rule_hit(arg, command)
     return True
+
+
+_WRAP = re.compile(r"^(?:[({!]\s*)*(?:(?:sudo|env|command|exec|nohup|time|nice|xargs)\s+(?:-\S+\s+)*|[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*")
+
+
+def bash_rule_hit(arg: str, command: str) -> bool:
+    """Bash(prefix:*) / Bash(pat*tern) against every command segment (wrappers stripped); fail closed on
+    indirection ($(), backticks, eval, sh -c, backslashes) when the rule's program appears anywhere."""
+    pat = " ".join((arg[:-2] + " *" if arg.endswith(":*") else arg).split())
+    parts = pat.split("*")
+    rx = re.compile("^" + ".*".join(re.escape(x) for x in parts) + "$")
+    bare = re.compile("^" + re.escape(pat[:-2]) + "$") if pat.endswith(" *") else None
+    for seg in re.split(r"&&|\|\||;|\||&|\n", command):
+        seg = " ".join(_WRAP.sub("", seg.strip()).rstrip(" )}").split())
+        if rx.match(seg) or (bare and bare.match(seg)):
+            return True
+    prog = pat.split(" ", 1)[0].strip("*")
+    indirect = re.search(r"\$\(|`|\beval\b|\b(?:ba|z)?sh\s+-\w*c|\\", command)
+    return bool(prog and indirect and re.search(r"(?<![\w./-])" + re.escape(prog) + r"(?![\w-])", command))
 
 
 
