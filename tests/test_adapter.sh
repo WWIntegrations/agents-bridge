@@ -7,7 +7,7 @@ H="$R/examples/hooks"
 PY="/usr/bin/python3 -I"
 T=$(mktemp -d)
 export AGENTS_STATE_DIR="$T/state" AGENTS_BRIDGE_HOME="$R"
-printf '{"hooks_source":"%s","approval_word":"approve"}' "$R/examples/hooks.json" > "$T/bridge.json"
+printf '{"hooks_source":"%s","approval_word":"approve","ask_tools":["mcp__paid__generate-*"]}' "$R/examples/hooks.json" > "$T/bridge.json"
 export AGENTS_BRIDGE_CONFIG="$T/bridge.json"
 ok=0; bad=0
 check() {  # desc harness expected_rc payload [hook...]  (no hook = --dispatch)
@@ -63,6 +63,9 @@ check "opencode patch tool"             opencode 2 '{"cwd":"/tmp/p","tool_name":
 printf '#!/bin/sh\ngrep -q "\\"tool_name\\": *\\"mcp__my_srv__" && { echo "BLOCKED my_srv" >&2; exit 2; }; exit 0\n' > "$T/g.sh"; chmod +x "$T/g.sh"
 check "gemini ambiguous MCP name: every split checked" gemini 2 '{"cwd":"/tmp","tool_name":"mcp_my_srv_do_thing","tool_input":{}}' "$T/g.sh"
 check "gemini other MCP server passes"   gemini 0 '{"cwd":"/tmp","tool_name":"mcp_other_do_thing","tool_input":{}}' "$T/g.sh"
+
+check "ask_tools blocks paid MCP (codex _ name)" codex 2 '{"cwd":"/tmp","tool_name":"mcp__paid__generate_video","tool_input":{}}'
+check "free MCP tool passes"            codex 0 '{"cwd":"/tmp","tool_name":"mcp__paid__balance","tool_input":{}}'
 
 # context events
 out=$(printf '{"cwd":"/tmp","session_id":"s","source":"startup"}' | $PY "$A" --harness codex --event SessionStart --dispatch)

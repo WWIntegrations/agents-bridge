@@ -99,6 +99,8 @@ python3 tests/test_sync.py     # full sync in a throwaway $HOME: every target, n
   Prefer an agent's own keychain/OAuth support where it has one, and keep `mcp_secret_headers` minimal.
 - A repo's `.mcp.json` is controlled by the repo. sync.py bridges only the servers you approved in Claude Code
   (`enabledMcpjsonServers` / `enableAllProjectMcpServers`), or the ones listed in `project_mcp_allow`.
+- **Paid or risky tools:** list them in `ask_tools` (or keep them in Claude's `permissions.ask`). The adapter turns them into an approval
+  code. In a live test, Codex 0.164 `exec` ran an MCP tool set to `approval_mode = "prompt"` without asking, so don't rely on that setting alone.
 - A guard that crashes (exit code other than 0 or 2) **blocks** in PreToolUse (`strict_errors`, default on). Claude Code itself would let the call through.
 - `bridge/mcp-headers` prints secrets on stdout, because that is how header helpers work. Never run it inside an agent session.
 

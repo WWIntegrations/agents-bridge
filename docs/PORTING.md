@@ -128,4 +128,6 @@ Set `"source": "codex"` in `bridge.json`. The table at the top of `bridge/sync.p
 6. **A missing guard script** (`rc 127`) must block, not pass. The adapter treats 126/127 and timeouts as a block in PreToolUse.
 7. **Plugin SessionStart hooks with side effects** (spawning `claude -p`, rewriting files) should not run inside other agents.
    Put them in `skip`, and re-implement only the read-only part in `context_files`.
-8. **Codex rewrites `config.toml`** (model, trust). sync.py merges inside a marked block, and the tests cover this.
+8. **Codex MCP `approval_mode = "prompt"` did not stop a call in `codex exec`** (live test, 0.164). Codex also rewrites `-` to `_`
+   in MCP tool names it sends to hooks. Gate paid tools in a PreToolUse hook (`ask_tools`).
+9. **Codex rewrites `config.toml`** (model, trust). sync.py merges inside a marked block, and the tests cover this.

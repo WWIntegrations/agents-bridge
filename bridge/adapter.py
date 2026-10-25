@@ -50,6 +50,7 @@ DEFAULTS = {
     "state_dir": str(HOME / ".agents" / "state"),
     "lang": "en",
     "timeout": 60,
+    "ask_tools": [],                 # tool names (mcp__srv__tool, "mcp__srv__*") that always need approval
     "strict_errors": True,           # PreToolUse: a guard exiting with rc other than 0/2 blocks (Claude would pass)
 }
 
@@ -303,6 +304,23 @@ def record_approvals(prompt: str) -> list[str]:
 
 
 # ------------------------------------------------------------------------------------------------ hooks source
+def ask_tool(tool: str) -> bool:
+    """Tools that always need the user's approval outside Claude: bridge.json "ask_tools" plus permissions.ask of the
+    hooks source (a Claude settings.json). Don't rely on the agent's own prompt: in Codex 0.164 `codex exec` ran an MCP
+    tool configured with approval_mode="prompt" without asking. Matches mcp names with "-" == "_" (Codex rewrites "-")."""
+    rules = list(CFG.get("ask_tools") or [])
+    try:
+        rules += (json.loads(Path(os.path.expanduser(CFG["hooks_source"])).read_text()).get("permissions") or {}).get("ask") or []
+    except (OSError, ValueError, AttributeError):
+        pass
+    t = tool.replace("-", "_")
+    for r in rules:
+        r = str(r).replace("-", "_")
+        if "(" not in r and (r == t or (r.endswith("*") and t.startswith(r[:-1]))):
+            return True
+    return False
+
+
 def matcher_ok(matcher, tool: str) -> bool:
     if matcher in (None, "", "*"):
         return True
@@ -488,6 +506,13 @@ def main() -> int:
 
     for pl in payloads:
         approved = None  # one approval covers every "ask" guard for this exact call
+        if ev == "PreToolUse" and a.harness != "claude" and ask_tool(pl.get("tool_name", "")):
+            approved = approval_consume(pl)
+            if not approved:
+                code = approval_code(pl)
+                log(f"ask_tools->deny code {code} {pl.get('tool_name')}")
+                return block(a.harness, T["needs"].format(k=code, r=f"{pl.get('tool_name')} needs approval (ask_tools)",
+                                                          w=CFG["approval_word"]))
         if a.dispatch:
             try:
                 cmds = source_cmds(ev, pl.get("tool_name", ""), a.harness)
