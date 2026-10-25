@@ -28,7 +28,7 @@ for srv, hdrs in (cfg.get("mcp_secret_headers") or {}).items():
         val = got.get(header, "")
         if val.startswith("Bearer ") and "Bearer" in var:
             val = val[len("Bearer "):]
-        if val:
+        if val and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
             print(f"export {name}={shlex.quote(val)}")
 PY
 )"

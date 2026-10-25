@@ -49,6 +49,7 @@ DEFAULTS = {
     "state_dir": str(HOME / ".agents" / "state"),
     "lang": "en",
     "timeout": 60,
+    "strict_errors": True,           # PreToolUse: a guard exiting with rc other than 0/2 blocks (Claude would pass)
 }
 
 MSG = {
@@ -57,12 +58,14 @@ MSG = {
            "badin": "BLOCKED: agents-bridge could not read the hook input (fail closed).",
            "noguard": "BLOCKED: guard {n} did not run (rc={rc}): {e} - fail closed.",
            "tmo": "BLOCKED: guard {n} timed out (fail closed).",
+           "err": "BLOCKED: guard {n} failed (rc={rc}): {e} - fail closed.",
            "nosrc": "BLOCKED: cannot read hooks source {p}: {e}"},
     "pl": {"needs": "WYMAGA ZGODY UZYTKOWNIKA (kod {k}): {r}\nZapytaj. Jesli odpisze '{w} {k}', ponow DOKLADNIE te sama operacje.",
            "saved": "Zgoda zapisana dla kodu {k} ({m} min). Ponow te sama operacje.",
            "badin": "BLOCKED: agents-bridge nie odczytal wejscia hooka (fail closed).",
            "noguard": "BLOCKED: bramka {n} nie uruchomila sie (rc={rc}): {e} - fail closed.",
            "tmo": "BLOCKED: bramka {n} przekroczyla czas (fail closed).",
+           "err": "BLOCKED: bramka {n} zakonczyla sie bledem (rc={rc}): {e} - fail closed.",
            "nosrc": "BLOCKED: nie odczytam zrodla hookow {p}: {e}"},
 }
 
@@ -82,10 +85,12 @@ def load_config() -> dict:
 CFG = load_config()
 STATE = Path(os.environ.get("AGENTS_STATE_DIR", CFG["state_dir"]))
 APPROVALS = STATE / "approvals"
+PENDING = STATE / "pending"
 T = MSG.get(CFG["lang"], MSG["en"])
 
-SHELL_TOOLS = {"bash", "shell", "exec_command", "local_shell", "unified_exec", "run_shell_command", "container.exec"}
-PATCH_TOOLS = {"apply_patch", "applypatch"}
+SHELL_TOOLS = {"bash", "shell", "exec_command", "local_shell", "unified_exec", "run_shell_command", "container.exec",
+               "write_stdin", "shell_command"}
+PATCH_TOOLS = {"apply_patch", "applypatch", "patch"}
 TOOL_MAP = {  # Gemini CLI / OpenCode / Qwen / Goose tool names -> Claude Code
     "write_file": "Write", "write": "Write",
     "replace": "Edit", "edit": "Edit", "multiedit": "MultiEdit",
@@ -94,6 +99,7 @@ TOOL_MAP = {  # Gemini CLI / OpenCode / Qwen / Goose tool names -> Claude Code
     "list_directory": "Glob", "ls": "Glob",
     "web_fetch": "WebFetch", "webfetch": "WebFetch", "google_web_search": "WebSearch", "websearch": "WebSearch",
     "task": "Agent", "spawn_agent": "Agent",
+    "multi_edit": "MultiEdit", "notebook_edit": "NotebookEdit", "notebookedit": "NotebookEdit",
 }
 TOOL_EVENTS = ("PreToolUse", "PostToolUse")
 EVENT_ALIAS = {"BeforeTool": "PreToolUse", "AfterTool": "PostToolUse", "BeforeAgent": "UserPromptSubmit",
@@ -110,6 +116,16 @@ def log(msg: str) -> None:
 
 
 # ------------------------------------------------------------------------------------------------ normalize
+def gemini_servers() -> list[str]:
+    names: list[str] = []
+    for f in (HOME / ".gemini" / "settings.json", Path(os.getcwd()) / ".gemini" / "settings.json"):
+        try:
+            names += list((json.loads(f.read_text()).get("mcpServers") or {}))
+        except (OSError, ValueError, AttributeError):
+            pass
+    return names
+
+
 def _abs(p: str, cwd: str) -> str:
     if not p:
         return p
@@ -118,7 +134,7 @@ def _abs(p: str, cwd: str) -> str:
 
 
 def _cmd(ti: dict) -> str:
-    c = ti.get("command", ti.get("cmd", ""))
+    c = ti.get("command", ti.get("cmd", ti.get("chars", "")))
     if isinstance(c, list):
         if len(c) >= 3 and os.path.basename(str(c[0])) in ("bash", "zsh", "sh") and c[1] in ("-lc", "-c"):
             return str(c[2])
@@ -186,9 +202,10 @@ def normalize(harness: str, event: str, p: dict) -> list[dict]:
     low = name.lower()
 
     cmd_text = _cmd(ti) if isinstance(ti, dict) else ""
-    patch_in = isinstance(ti, dict) and "*** Begin Patch" in str(ti.get("input", ""))
-    if low in PATCH_TOOLS or "*** Begin Patch" in cmd_text or patch_in:
-        text = cmd_text if "*** Begin Patch" in cmd_text else str(ti.get("input", ti.get("patch", "")))
+    patch_field = next((str(ti[k]) for k in ("input", "patch", "patchText", "patch_text")
+                        if isinstance(ti, dict) and "*** Begin Patch" in str(ti.get(k, ""))), "")
+    if low in PATCH_TOOLS or "*** Begin Patch" in cmd_text or patch_field:
+        text = cmd_text if "*** Begin Patch" in cmd_text else patch_field
         out = []
         for op in parse_patch(text, cwd):
             if op["op"] == "delete":
@@ -209,10 +226,13 @@ def normalize(harness: str, event: str, p: dict) -> list[dict]:
         return [{**base, "tool_name": "Bash", "tool_input": {**ti, "command": cmd_text}}]
     if name.startswith("mcp__"):
         return [{**base, "tool_name": name, "tool_input": ti}]
-    if harness == "gemini" and name.startswith("mcp_"):  # gemini: mcp_<server>_<tool>
-        parts = name.split("_", 2)
-        if len(parts) == 3:
-            return [{**base, "tool_name": f"mcp__{parts[1]}__{parts[2]}", "tool_input": ti}]
+    if harness == "gemini" and name.startswith("mcp_"):  # gemini: mcp_<server>_<tool>; server names may contain "_"
+        rest = name[4:]
+        srv = max((s for s in gemini_servers() if rest.startswith(s + "_")), key=len, default="")
+        if not srv and "_" in rest:
+            srv = rest.split("_", 1)[0]
+        if srv:
+            return [{**base, "tool_name": f"mcp__{srv}__{rest[len(srv) + 1:]}", "tool_input": ti}]
 
     cl = TOOL_MAP.get(low, name)
     tin = dict(ti) if isinstance(ti, dict) else {}
@@ -230,15 +250,34 @@ def normalize(harness: str, event: str, p: dict) -> list[dict]:
 
 
 # ------------------------------------------------------------------------------------------------ approvals
+def payload_hash(payload: dict) -> str:
+    key = json.dumps({"t": payload.get("tool_name"), "i": payload.get("tool_input"), "s": payload.get("session_id")},
+                     sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
 def approval_code(payload: dict) -> str:
-    key = json.dumps({"t": payload.get("tool_name"), "i": payload.get("tool_input")}, sort_keys=True, ensure_ascii=False)
-    return hashlib.sha256(key.encode()).hexdigest()[:6].upper()
-
-
-def approval_active(code: str) -> bool:
-    f = APPROVALS / code
+    """Short code shown to the user; the full hash of the exact call is kept server-side in PENDING."""
+    h = payload_hash(payload)
+    code = h[:6].upper()
     try:
-        return f.is_file() and time.time() - f.stat().st_mtime < float(CFG["approval_ttl"])
+        PENDING.mkdir(parents=True, exist_ok=True)
+        os.chmod(PENDING, 0o700)
+        (PENDING / code).write_text(h)
+    except OSError as e:
+        log(f"pending write fail: {e}")
+    return code
+
+
+def approval_consume(payload: dict) -> bool:
+    """True once per approval: the code was approved by the user within ttl AND it was issued for this exact call."""
+    h = payload_hash(payload)
+    f = APPROVALS / h[:6].upper()
+    try:
+        ok = f.is_file() and f.read_text().strip() == h and time.time() - f.stat().st_mtime < float(CFG["approval_ttl"])
+        if ok:
+            f.unlink()
+        return ok
     except OSError:
         return False
 
@@ -246,13 +285,19 @@ def approval_active(code: str) -> bool:
 def record_approvals(prompt: str) -> list[str]:
     word = re.escape(CFG["approval_word"])
     codes = [c.upper() for c in re.findall(rf"\b{word}[\s:]+([0-9A-F]{{6}})\b", prompt or "", flags=re.I)]
-    if codes:
+    got = []
+    for c in codes:
+        try:
+            h = (PENDING / c).read_text().strip()  # only codes the adapter actually issued
+        except OSError:
+            continue
         APPROVALS.mkdir(parents=True, exist_ok=True)
         os.chmod(APPROVALS, 0o700)
-    for c in codes:
-        (APPROVALS / c).write_text(str(int(time.time())))
+        (APPROVALS / c).write_text(h)
+        (PENDING / c).unlink()
+        got.append(c)
         log(f"approval {c}")
-    return codes
+    return got
 
 
 # ------------------------------------------------------------------------------------------------ hooks source
@@ -440,6 +485,7 @@ def main() -> int:
             texts.append(c)
 
     for pl in payloads:
+        approved = None  # one approval covers every "ask" guard for this exact call
         if a.dispatch:
             try:
                 cmds = source_cmds(ev, pl.get("tool_name", ""), a.harness)
@@ -474,11 +520,16 @@ def main() -> int:
                 if dec == "deny":
                     log(f"deny {name} {pl.get('tool_name')}")
                     return block(a.harness, reason)
+                if rc not in (0, 2) and CFG["strict_errors"]:  # crashed guard = unknown verdict = block
+                    log(f"guard error {name} rc={rc}")
+                    return block(a.harness, T["err"].format(n=name, rc=rc, e=err.strip()[:200]))
                 if dec == "ask":
-                    code = approval_code(pl)
-                    if approval_active(code):
-                        log(f"ask->allow ({code}) {name}")
+                    if approved is None:
+                        approved = approval_consume(pl)
+                    if approved:
+                        log(f"ask->allow (approved) {name}")
                         continue
+                    code = approval_code(pl)
                     log(f"ask->deny code {code} {name}")
                     return block(a.harness, T["needs"].format(k=code, r=reason, w=CFG["approval_word"]))
                 if err.strip():

@@ -47,6 +47,21 @@ code2=$(printf '{"cwd":"/tmp/p","tool_name":"Bash","tool_input":{"command":"cat 
 printf '{"prompt":"approve %s"}' "${code2:-000000}" | $PY "$A" --harness codex --event UserPromptSubmit --dispatch >/dev/null
 check "deny has no code, stays blocked"   codex 2 '{"cwd":"/tmp/p","tool_name":"Bash","tool_input":{"command":"cat .env"}}'
 
+# hardening (security review): single-use approvals, unissued codes, crashed guards, more tool names
+check "approval is single-use"          codex 2 "$PL"
+printf '{"prompt":"approve ABCDEF"}' | $PY "$A" --harness codex --event UserPromptSubmit --dispatch >/dev/null
+[ ! -e "$AGENTS_STATE_DIR/approvals/ABCDEF" ] && { ok=$((ok+1)); echo "OK   unissued code is ignored"; } || { bad=$((bad+1)); echo "FAIL unissued code recorded"; }
+mkdir -p "$AGENTS_STATE_DIR/approvals"; c3=$(printf '%s' "$PL" | $PY "$A" --harness codex --event PreToolUse --dispatch 2>&1 >/dev/null | sed -n 's/.*(code \([0-9A-F]\{6\}\)).*/\1/p')
+echo "0000" > "$AGENTS_STATE_DIR/approvals/$c3"
+check "forged approval (wrong hash) fails" codex 2 "$PL"
+printf '#!/bin/sh\nexit 1\n' > "$T/crash.sh"; chmod +x "$T/crash.sh"
+check "crashed guard (rc=1) blocks"     codex 2 '{"cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"ls"}}' "$T/crash.sh"
+check "codex write_stdin is a shell"    codex 2 "{\"cwd\":\"/tmp\",\"tool_name\":\"write_stdin\",\"tool_input\":{\"session_id\":1,\"chars\":\"$RM\\n\"}}"
+check "opencode patch tool"             opencode 2 '{"cwd":"/tmp/p","tool_name":"patch","tool_input":{"patchText":"*** Begin Patch\n*** Update File: .env\n@@\n-A\n+B\n*** End Patch"}}'
+mkdir -p "$T/home/.gemini"; printf '{"mcpServers":{"my_srv":{}}}' > "$T/home/.gemini/settings.json"
+out=$(printf '{"cwd":"/tmp","tool_name":"mcp_my_srv_do_thing","tool_input":{}}' | HOME="$T/home" $PY "$A" --harness gemini --event PreToolUse -- /bin/sh -c 'python3 -c "import json,sys;print(json.load(sys.stdin)[\"tool_name\"],file=sys.stderr)"; exit 2' 2>&1 >/dev/null)
+case "$out" in *mcp__my_srv__do_thing*) ok=$((ok+1)); echo "OK   gemini MCP server with underscore";; *) bad=$((bad+1)); echo "FAIL gemini MCP name: $out";; esac
+
 # context events
 out=$(printf '{"cwd":"/tmp","session_id":"s","source":"startup"}' | $PY "$A" --harness codex --event SessionStart --dispatch)
 case "$out" in *"Today is"*) ok=$((ok+1)); echo "OK   SessionStart context (plain)";; *) bad=$((bad+1)); echo "FAIL SessionStart: $out";; esac

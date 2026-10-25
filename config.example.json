@@ -29,12 +29,14 @@
   "mcp_header_helper": "~/agents-bridge/bridge/mcp-headers",
   "mcp_secret_headers": {"exa": {"x-api-key": "EXA_API_KEY"}, "github": {"Authorization": "Bearer ${GITHUB_MCP_TOKEN}"}},
   "ask_tools": [],
+  "project_mcp_allow": {"~/code/project-a": ["docs-server"]},
 
   "local_models": {"ollama": "http://127.0.0.1:11434/v1", "lmstudio": "http://127.0.0.1:1234/v1"},
   "local_model_names": {"ollama": ["qwen3-coder:30b"], "lmstudio": ["qwen3-coder-30b"]},
 
   "approval_word": "approve",
   "approval_ttl": 600,
+  "strict_errors": true,
   "lang": "en",
   "state_dir": "~/.agents/state"
 }

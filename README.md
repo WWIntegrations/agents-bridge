@@ -89,6 +89,17 @@ python3 tests/test_sync.py     # full sync in a throwaway $HOME: every target, n
 - Every generated file carries an agents-bridge marker. A file you wrote yourself gets a `.pre-bridge-<timestamp>.bak` copy before the first
   overwrite. Codex `config.toml` is merged inside a marked block, and Codex's own writes are preserved.
 - Guards are only as good as your scripts. The adapter's job is to make sure they actually **run**, and that they **fail closed**.
+- **Approvals are as strong as the sandbox.** A code is bound to the full SHA-256 of the exact call and session, can be used once,
+  and is honored only if the adapter itself issued it. But an agent that can write to `state_dir` can forge one, and so can any
+  process running as your user without a sandbox. Codex `workspace-write` keeps `state_dir` out of reach, because sync.py
+  never adds it to `writable_roots`. For Gemini, OpenCode, Qwen and Goose, run them sandboxed (Gemini `--sandbox`, a container or a
+  separate user) if you need approvals that the agent cannot forge. The example `ask-agent-config.sh` guard only raises the bar.
+- **Secret env vars and the shell.** For agents without a header helper, `bridge/agent` exports MCP header secrets into the agent
+  process, so its shell tool inherits them too. The OpenCode guard plugin scrubs them from the shell env; the other agents don't.
+  Prefer an agent's own keychain/OAuth support where it has one, and keep `mcp_secret_headers` minimal.
+- A repo's `.mcp.json` is controlled by the repo. sync.py bridges only the servers you approved in Claude Code
+  (`enabledMcpjsonServers` / `enableAllProjectMcpServers`), or the ones listed in `project_mcp_allow`.
+- A guard that crashes (exit code other than 0 or 2) **blocks** in PreToolUse (`strict_errors`, default on). Claude Code itself would let the call through.
 - `bridge/mcp-headers` prints secrets on stdout, because that is how header helpers work. Never run it inside an agent session.
 
 ## Po polsku (skrót)

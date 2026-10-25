@@ -62,6 +62,7 @@ DEFAULTS = {
     "ask_tools": [],                        # extra "mcp__server__tool" needing approval (claude source reads permissions.ask)
     "local_models": {"ollama": "http://127.0.0.1:11434/v1", "lmstudio": "http://127.0.0.1:1234/v1"},
     "local_model_names": {"ollama": ["qwen3-coder:30b", "gpt-oss:20b"], "lmstudio": ["qwen3-coder-30b"]},
+    "project_mcp_allow": {},                # extra approvals for repo .mcp.json servers
     "project_files_exclude": True,          # add generated per-repo files to .git/info/exclude
 }
 
@@ -348,11 +349,26 @@ def src_mcp() -> dict[str, dict]:
 
 
 def project_mcp(repo: Path) -> dict[str, dict]:
+    """A repo's .mcp.json is repo-controlled: bridge only servers the user approved in Claude Code
+    (~/.claude.json projects[repo].enabledMcpjsonServers / enableAllProjectMcpServers, minus disabledMcpjsonServers),
+    or listed in bridge.json "project_mcp_allow": {"<repo>": ["server", ...]}."""
     try:
         d = json.loads((repo / ".mcp.json").read_text())
     except (OSError, ValueError):
         return {}
-    return {n: _neutral_mcp(c) for n, c in (d.get("mcpServers") or {}).items()}
+    try:
+        pj = (json.loads((HOME / ".claude.json").read_text()).get("projects") or {}).get(str(repo)) or {}
+    except (OSError, ValueError):
+        pj = {}
+    servers = d.get("mcpServers") or {}
+    allow = set(pj.get("enabledMcpjsonServers") or []) | set((CFG.get("project_mcp_allow") or {}).get(str(repo), []))
+    if pj.get("enableAllProjectMcpServers"):
+        allow |= set(servers)
+    allow -= set(pj.get("disabledMcpjsonServers") or [])
+    skipped = sorted(set(servers) - allow)
+    if skipped:
+        print(f"skip unapproved project MCP in {repo.name}: {', '.join(skipped)}")
+    return {n: _neutral_mcp(c) for n, c in servers.items() if n in allow}
 
 
 def src_permissions() -> tuple[list[list[str]], dict[str, list[str]]]:
