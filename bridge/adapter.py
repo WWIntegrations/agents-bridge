@@ -365,14 +365,14 @@ def bash_rule_hit(arg: str, command: str) -> bool:
     rx = re.compile("^" + ".*".join(re.escape(x) for x in pat.split("*")) + "$")
     bare = re.compile("^" + re.escape(pat[:-2]) + "$") if pat.endswith(" *") else None
     cmd = re.sub(r"\\\n", "", command)
-    if re.search(r"[\"'\\$`{}*?\[\]]", cmd) and prog in cmd:
+    if re.search(r"[\"'\\$`{}*?\[\]<>=]", cmd) and prog in cmd:
         return True  # unmodelled construct + program present anywhere
     for seg in re.split(r"&&|\|\||;|\||&|\n|\(|\)", cmd):
         seg = " ".join(_WRAP.sub("", seg.strip()).split())
         if not seg:
             continue
         w = seg.split(" ")
-        if re.search(r"[\"'\\$`{}*?\[\]]", w[0]):
+        if not re.fullmatch(r"[A-Za-z0-9_./+-]+", w[0]):
             return True  # program name itself is not a plain literal: unknown program, could be the gated one
         w[0] = os.path.basename(w[0])
         if rx.match(" ".join(w)) or (bare and bare.match(" ".join(w))):

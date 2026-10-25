@@ -81,6 +81,7 @@ starter guards: destructive commands need the user's yes, secret files are block
 
 ```bash
 bash tests/test_adapter.sh     # payloads from Codex/Gemini/OpenCode/Goose through the example guards + approval flow
+python3 tests/test_rules.py    # approval-rule matcher: every bypass found in security review
 python3 tests/test_sync.py     # full sync in a throwaway $HOME: every target, no secrets, idempotent, Codex writes preserved
 ```
 
